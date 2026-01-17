@@ -111,43 +111,82 @@ def dashboard_page():
         st.warning("Please upload data first.")
         st.stop()
 
+    # Use the cleaned, long-format data
     df = st.session_state.clean_data.copy()
+    st.markdown(f"**Current File:** `{st.session_state.filename}`")
 
-    # -------- SIDEBAR FILTERS --------
-    st.sidebar.header("Filters")
+    # --- Sidebar Filters ---
+    st.sidebar.header("Filters & Settings")
+    
+    # 1. Date Filter (Single Day)
+    # Get available dates from the data
+    available_dates = sorted(df["Date"].dt.date.unique())
+    if available_dates:
+        selected_date = st.sidebar.selectbox(
+            "Select Date", 
+            available_dates, 
+            index=len(available_dates)-1 # Default to latest
+        )
+        df = df[df["Date"].dt.date == selected_date]
+    else:
+        st.error("No date information found in data.")
+        return
 
-    selected_date = st.sidebar.date_input(
-        "Select Date",
-        value=df["Date"].max().date(),
-        min_value=df["Date"].min().date(),
-        max_value=df["Date"].max().date()
-    )
-
+    # 2. Item Filter
     items = sorted(df["Item"].unique())
-    selected_items = st.sidebar.multiselect("Select Items", items, default=items)
+    selected_items = st.sidebar.multiselect("Filter Items (Leave empty for All)", items)
+    if selected_items:
+        df = df[df["Item"].isin(selected_items)]
 
-    df = df[
-        (df["Date"].dt.date == selected_date) &
-        (df["Item"].isin(selected_items))
-    ]
+    st.sidebar.markdown("---")
+    st.sidebar.header("Stock Alerts")
 
-    # -------- KPIs --------
+    # 3. Low Stock Threshold
+    threshold = st.sidebar.number_input("Low Stock Threshold", min_value=0, value=10, step=1)
+    
+    # 4. Low Stock Filter
+    show_low_only = st.sidebar.checkbox("Show Only Low Stock Items", value=False)
+    
+    if show_low_only:
+        df = df[df["Stock"] < threshold]
+
+    # --- Sorting ---
+    # Sort by Stock ascending so low stock items appear at the top
+    df = df.sort_values("Stock", ascending=True)
+
+    # --- Metrics ---
     c1, c2, c3 = st.columns(3)
-    c1.metric("Total Items", df["Item"].nunique())
-    c2.metric("Total Stock", int(df["Stock"].sum()))
-    c3.metric("Low Stock Items (<10)", int((df["Stock"] < 10).sum()))
+    c1.metric("Total Items Listed", df["Item"].nunique())
+    c2.metric("Total Stock Count", f"{df['Stock'].sum():,.0f}")
+    
+    low_stock_count = (df["Stock"] < threshold).sum()
+    c3.metric(f"Items Below Threshold ({threshold})", low_stock_count, delta_color="inverse")
 
-    # -------- TABLE --------
-    st.markdown("### Inventory Snapshot")
-    st.dataframe(
-        df.sort_values("Stock"),
-        use_container_width=True
-    )
+    # --- Display ---
+    st.subheader("Inventory Data")
+    
+    # Conditional Formatting
+    def highlight_low_stock(s, threshold):
+        is_low = s["Stock"] < threshold
+        return ['background-color: #ffcccc' if is_low else '' for _ in s]
+
+    try:
+        # Apply style
+        styled_df = df.style.apply(highlight_low_stock, threshold=threshold, axis=1)
+        
+        # Formatting
+        styled_df = styled_df.format({"Stock": "{:.0f}", "Date": "{:%Y-%m-%d}"})
+        
+        st.dataframe(styled_df, use_container_width=True)
+    except Exception as e:
+        st.error(f"Could not apply styling: {e}")
+        st.dataframe(df, use_container_width=True)
 
     # -------- DOWNLOAD --------
+    csv = df.to_csv(index=False).encode("utf-8")
     st.download_button(
         "Download View as CSV",
-        df.to_csv(index=False).encode("utf-8"),
+        csv,
         "inventory_snapshot.csv",
         "text/csv"
     )
